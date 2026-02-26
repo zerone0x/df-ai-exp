@@ -1,15 +1,17 @@
 #!/usr/bin/expect -f
-set timeout 40
+set timeout 50
 set logfile [lindex $argv 0]
-spawn script -q -c "cd /home/sober/dwarf-fortress && ./dfhack" $logfile
-
+set env(TERM) "xterm-256color"
+spawn script -q -c "cd /home/sober/dwarf-fortress && xvfb-run -a -s '-screen 0 1280x720x24' ./dfhack" $logfile
 expect {
   -re {\[DFHack\]#} {
     send "help\r"
-    after 800
+    after 1000
     send "ls\r"
-    after 800
-    send "die\r"
+    after 1000
+    # keep alive briefly to test stability
+    after 5000
+    send "\003"
   }
   timeout {
     send "\003"
