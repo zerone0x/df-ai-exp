@@ -1,0 +1,18 @@
+#!/usr/bin/expect -f
+set timeout 40
+set logfile [lindex $argv 0]
+spawn script -q -c "cd /home/sober/dwarf-fortress && ./dfhack" $logfile
+
+expect {
+  -re {\[DFHack\]#} {
+    send "help\r"
+    after 800
+    send "ls\r"
+    after 800
+    send "die\r"
+  }
+  timeout {
+    send "\003"
+  }
+}
+expect eof
