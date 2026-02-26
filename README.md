@@ -52,3 +52,15 @@ DF_ROOT=/absolute/path/to/your/df make smoke
 ```
 
 Current observation: `none` can pass, but interactive modes (`help/ls/exit`) trigger FPE in this environment.
+
+
+## Non-interactive workaround
+
+Interactive console input currently triggers FPE in this environment.
+A stable workaround is:
+1. start DF/DFHack as a background host process
+2. send commands with `dfhack-run` (non-interactive)
+
+```bash
+DF_ROOT=/absolute/path/to/your/df ./scripts/noninteractive_runner.sh
+```
