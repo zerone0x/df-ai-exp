@@ -39,3 +39,16 @@ make smoke
 # optional custom path
 DF_ROOT=/absolute/path/to/your/df make smoke
 ```
+
+
+## FPE repro matrix
+
+```bash
+# in your DF install root (where ./dfhack exists)
+./tools/repro_fpe.sh none
+./tools/repro_fpe.sh help
+./tools/repro_fpe.sh ls
+./tools/repro_fpe.sh exit
+```
+
+Current observation: `none` can pass, but interactive modes (`help/ls/exit`) trigger FPE in this environment.
