@@ -30,3 +30,12 @@ python3 scripts/agent_loop.py
 - [ ] Reach game menu/worldgen state reliably
 - [ ] Implement action planner/executor bridge
 - [ ] Add regression test fixtures for log parser
+
+
+## Smoke test
+
+```bash
+make smoke
+# optional custom path
+DF_ROOT=/path/to/df make smoke
+```
