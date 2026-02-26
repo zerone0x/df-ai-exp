@@ -1,4 +1,4 @@
-DF_ROOT ?= /home/sober/df53/app
+DF_ROOT ?= /path/to/df
 
 .PHONY: smoke
 smoke:

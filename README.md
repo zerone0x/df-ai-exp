@@ -37,5 +37,5 @@ python3 scripts/agent_loop.py
 ```bash
 make smoke
 # optional custom path
-DF_ROOT=/path/to/df make smoke
+DF_ROOT=/absolute/path/to/your/df make smoke
 ```
