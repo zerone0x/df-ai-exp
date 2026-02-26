@@ -3,3 +3,4 @@ logs/
 *.json
 __pycache__/
 .DS_Store
+config/df_root.txt

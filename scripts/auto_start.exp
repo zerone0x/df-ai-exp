@@ -1,8 +1,26 @@
 #!/usr/bin/expect -f
+# Launch DFHack, run a few commands, and capture the transcript.
+
 set timeout 50
+
+if {[llength $argv] < 1} {
+  puts stderr "Usage: auto_start.exp <logfile> ?df_root?"
+  exit 1
+}
+
 set logfile [lindex $argv 0]
+if {[llength $argv] >= 2} {
+  set df_root [lindex $argv 1]
+} elseif {[info exists env(DF_ROOT)]} {
+  set df_root $env(DF_ROOT)
+} else {
+  puts stderr "DF root not provided. Pass as argument or set DF_ROOT."
+  exit 1
+}
+
 set env(TERM) "xterm-256color"
-spawn script -q -c "cd /home/sober/dwarf-fortress && xvfb-run -a -s '-screen 0 1280x720x24' ./dfhack" $logfile
+set cmd "cd \"$df_root\" && xvfb-run -a -s '-screen 0 1280x720x24' ./dfhack"
+spawn script -q -c $cmd $logfile
 expect {
   -re {\[DFHack\]#} {
     send "help\r"
