@@ -196,5 +196,9 @@ nohup Xvfb :50 -screen 0 1280x800x24 -ac &>/tmp/xvfb.log &
 | `xdotool click` | ❌ | SDL2 过滤 |
 | python-xlib XTEST 鼠标 | ✅ | 唯一可靠的 UI 控制 |
 | python-xlib XTEST 键盘 | ❌ | SDL2 不处理 |
-| scrot 截图 | ✅ | 状态验证 |
+| scrot 截图 | ⚠️ | Premium: GPU 渲染导致截图可能是脏数据 |
 | 文件系统检查 (save/) | ✅ | worldgen 完成检测 |
+| TEXT 模式 (PRINT_MODE:TEXT) | ✅ | 不需要 Xvfb，用 PTY 即可 |
+| quickfort (蓝图) | ✅ | 堡垒模式下可用，dfhack-run 执行 |
+| dig-now | ✅ | 堡垒模式下可用（主菜单报 "Map not available"）|
+| dfhack lua (TEXT 模式) | ❌ | 仍然 segfault（不是 SDL2 的问题）|
