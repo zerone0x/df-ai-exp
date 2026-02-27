@@ -64,3 +64,19 @@ A stable workaround is:
 ```bash
 DF_ROOT=/absolute/path/to/your/df ./scripts/noninteractive_runner.sh
 ```
+
+## Worldgen automation (MVP)
+
+Worldgen is now supported as a mixed-action goal:
+- `dfhack` actions: executed with `dfhack-run`
+- `keystroke` actions: sent to the DF window via `xdotool`
+
+Use:
+```bash
+python3 scripts/goal_runner.py --goal worldgen
+```
+
+Notes:
+- requires an X display host (`xvfb-run` is already used by `goal_runner.py`)
+- requires `xdotool` installed on the host
+- completion is verified with DFHack Lua state probes plus presence of `data/save/region*`

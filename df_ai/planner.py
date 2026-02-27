@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List
 
+from .goals.worldgen import plan_worldgen
+
 
 CATALOG_PATH = Path(__file__).resolve().parents[1] / "config" / "command_catalog.json"
 
@@ -24,7 +26,7 @@ def _has_command(catalog: Dict[str, Any], argv: List[str]) -> bool:
     return False
 
 
-def plan_for_goal(goal: str, catalog: Dict[str, Any] | None = None) -> List[Dict[str, str]]:
+def plan_for_goal(goal: str, catalog: Dict[str, Any] | None = None) -> List[Dict[str, Any]]:
     cat = catalog or load_catalog()
 
     if goal == "quickfort_probe":
@@ -53,6 +55,9 @@ def plan_for_goal(goal: str, catalog: Dict[str, Any] | None = None) -> List[Dict
                 "expect": "ok",
             })
         return plan
+
+    if goal == "worldgen":
+        return plan_worldgen()
 
     # default conservative goal
     return [

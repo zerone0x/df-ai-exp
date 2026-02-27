@@ -11,6 +11,7 @@ class Action:
     name: str
     argv: List[str]
     reason: str
+    type: str = "dfhack"
 
     @property
     def display(self) -> str:
