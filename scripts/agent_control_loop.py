@@ -23,6 +23,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from df_ai.config import get_df_root, get_logs_dir
 from df_ai.executor import execute_action
+from df_ai.llm_planner import choose_action_llm
 from df_ai.policy import choose_action
 from df_ai.state import extract_runtime_state
 
@@ -49,6 +50,13 @@ def main() -> None:
     parser.add_argument("--steps", type=int, default=20, help="Loop iterations")
     parser.add_argument("--warmup", type=float, default=8.0, help="Seconds to wait after host start")
     parser.add_argument("--interval", type=float, default=0.5, help="Seconds between steps")
+    parser.add_argument(
+        "--planner",
+        type=str,
+        choices=["rule", "llm"],
+        default="rule",
+        help="Planner policy to use: rule (default) or llm",
+    )
     args = parser.parse_args()
 
     df_root = get_df_root()
@@ -77,7 +85,10 @@ def main() -> None:
                 runtime_state["last_ok"] = last_ok
                 runtime_state["successful_commands"] = successful_commands
 
-                action = choose_action(runtime_state, step)
+                if args.planner == "llm":
+                    action = choose_action_llm(runtime_state, step)
+                else:
+                    action = choose_action(runtime_state, step)
                 result = execute_action(action)
 
                 if result["ok"]:
