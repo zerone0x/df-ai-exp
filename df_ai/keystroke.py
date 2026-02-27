@@ -54,18 +54,18 @@ def send_key(key: str, window_id: str | None = None, delay: float = 0.3) -> bool
         return False
 
     try:
-        activate = subprocess.run(
-            ["xdotool", "windowactivate", "--sync", target],
+        # Use windowfocus instead of windowactivate for headless Xvfb
+        # (no window manager means _NET_ACTIVE_WINDOW is unsupported)
+        subprocess.run(
+            ["xdotool", "windowfocus", "--sync", target],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             check=False,
         )
-        if activate.returncode != 0:
-            return False
 
         press = subprocess.run(
-            ["xdotool", "key", "--window", target, key],
+            ["xdotool", "key", "--window", target, "--clearmodifiers", key],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,

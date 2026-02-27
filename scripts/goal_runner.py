@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import time
 from datetime import datetime
@@ -30,8 +31,27 @@ def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
+def _ensure_xvfb(display: str = ":99") -> subprocess.Popen | None:
+    """Start Xvfb on *display* if not already running, and set DISPLAY globally."""
+    os.environ["DISPLAY"] = display
+    # Check if display is already active
+    probe = subprocess.run(
+        ["xdpyinfo", "-display", display],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    if probe.returncode == 0:
+        return None  # already running
+    xvfb = subprocess.Popen(
+        ["Xvfb", display, "-screen", "0", "1280x720x24"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    time.sleep(1)
+    return xvfb
+
+
 def start_host(df_root: Path, log_path: Path) -> subprocess.Popen:
-    cmd = ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24", str(df_root / "dfhack")]
+    _ensure_xvfb()
+    cmd = [str(df_root / "dfhack")]
     fp = log_path.open("w")
     return subprocess.Popen(cmd, stdout=fp, stderr=subprocess.STDOUT, text=True)
 
