@@ -59,9 +59,25 @@ def run_dfhack(
     """
 
     root = df_root or get_df_root()
-    executable = root / "dfhack-run"
-    if not executable.exists():
-        raise FileNotFoundError(f"dfhack-run not found at {executable}")
+
+    # Support both DF Premium (top-level dfhack-run wrapper) and
+    # Classic DF (hack/dfhack-run binary needing LD_LIBRARY_PATH).
+    wrapper = root / "dfhack-run"
+    hack_binary = root / "hack" / "dfhack-run"
+    if wrapper.exists():
+        executable = wrapper
+        env = None
+    elif hack_binary.exists():
+        executable = hack_binary
+        import os
+        env = os.environ.copy()
+        hack_dir = str(root / "hack")
+        hack_libs = str(root / "hack" / "libs")
+        env["LD_LIBRARY_PATH"] = f"{hack_libs}:{hack_dir}:{env.get('LD_LIBRARY_PATH', '')}"
+    else:
+        raise FileNotFoundError(
+            f"dfhack-run not found at {wrapper} or {hack_binary}"
+        )
 
     cmd = [str(executable)] + _normalize_command(command)
     attempts = 0
@@ -81,6 +97,7 @@ def run_dfhack(
                 timeout=timeout,
                 text=True,
                 check=False,
+                env=env,
             )
             stdout = completed.stdout
             stderr = completed.stderr

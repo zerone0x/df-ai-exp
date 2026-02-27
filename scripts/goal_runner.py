@@ -147,6 +147,11 @@ def main() -> None:
                 )
                 result = execute_action(action)
 
+                # Classic DF needs extra time between screen transitions.
+                step_delay = float(item.get("delay", 0))
+                if step_delay > 0:
+                    time.sleep(step_delay)
+
                 expect = item.get("expect")
                 if expect == "screen:worldgen_complete":
                     deadline = time.monotonic() + float(item.get("poll_seconds", 240))

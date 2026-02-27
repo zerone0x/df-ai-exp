@@ -4,19 +4,31 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-# Keystroke sequence from title screen using defaults:
-# 1) Enter title menu
-# 2) Move to "Create New World"
-# 3) Confirm defaults and start generation
-# 4) Wait/poll until done
+# Classic DF 0.47.05 startup screen sequence:
+#   1) OpenAL dialog  -> Return to dismiss
+#   2) Bay12 splash   -> Return to skip
+#   3) Welcome/alpha  -> Escape to continue
+#   4) Title menu     -> appears with "Create a New World!" already first option
+#                        but ESC from welcome goes directly to worldgen params
+#   5) Worldgen params -> y to accept defaults and start generation
+#   6) Poll until complete
+#   7) Accept world   -> Return
 WORLDGEN_PLAN: List[Dict[str, Any]] = [
-    {"name": "open-title-menu", "type": "keystroke", "key": "Return", "expect": "ok"},
-    {"name": "select-create-new-world", "type": "keystroke", "key": "Down", "expect": "ok"},
-    {"name": "confirm-create-new-world", "type": "keystroke", "key": "Return", "expect": "ok"},
-    {"name": "accept-world-defaults", "type": "keystroke", "key": "Return", "expect": "ok"},
-    {"name": "accept-parameters", "type": "keystroke", "key": "Return", "expect": "ok"},
-    {"name": "poll-worldgen", "type": "dfhack", "command": "lua print('worldgen-poll')", "expect": "screen:worldgen_complete", "poll_seconds": 300, "poll_interval": 2},
-    {"name": "verify-world-exists", "type": "dfhack", "command": "lua print(df.global.gamemode)", "expect": "screen:has_world"},
+    {"name": "dismiss-openal-dialog", "type": "keystroke", "key": "Return",
+     "expect": "ok", "delay": 2.0},
+    {"name": "skip-splash", "type": "keystroke", "key": "Return",
+     "expect": "ok", "delay": 2.0},
+    {"name": "skip-welcome", "type": "keystroke", "key": "Escape",
+     "expect": "ok", "delay": 2.0},
+    {"name": "start-worldgen", "type": "keystroke", "key": "y",
+     "expect": "ok", "delay": 1.0},
+    {"name": "poll-worldgen", "type": "dfhack", "command": "ls",
+     "expect": "screen:worldgen_complete", "poll_seconds": 600,
+     "poll_interval": 5},
+    {"name": "accept-world", "type": "keystroke", "key": "Return",
+     "expect": "ok", "delay": 5.0},
+    {"name": "verify-world-exists", "type": "dfhack", "command": "ls",
+     "expect": "screen:has_world"},
 ]
 
 
