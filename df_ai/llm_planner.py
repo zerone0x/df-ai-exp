@@ -1,4 +1,4 @@
-"""LLM-based action planner using Anthropic Claude API."""
+"""LLM-based action planner supporting OpenAI and Anthropic APIs."""
 
 from __future__ import annotations
 
@@ -12,25 +12,59 @@ from .prompts import SYSTEM_PROMPT, format_catalog, format_state
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_MODEL = "claude-sonnet-4-20250514"
+_DEFAULT_MODEL_OPENAI = "gpt-4o"
+_DEFAULT_MODEL_ANTHROPIC = "claude-sonnet-4-20250514"
+
+
+def _detect_backend() -> str:
+    """Detect which LLM backend to use based on available env vars."""
+    if os.environ.get("OPENAI_API_KEY"):
+        return "openai"
+    if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"):
+        return "anthropic"
+    return "openai"  # default
 
 
 def _get_model() -> str:
-    return os.environ.get("DF_AI_MODEL", _DEFAULT_MODEL)
+    explicit = os.environ.get("DF_AI_MODEL")
+    if explicit:
+        return explicit
+    backend = _detect_backend()
+    if backend == "openai":
+        return _DEFAULT_MODEL_OPENAI
+    return _DEFAULT_MODEL_ANTHROPIC
 
 
-def _get_client():  # -> anthropic.Anthropic | None
+def _get_openai_client():
+    try:
+        import openai
+    except ImportError:
+        logger.error("openai package not installed: pip install openai")
+        return None
+
+    key = os.environ.get("OPENAI_API_KEY", "")
+    if not key:
+        logger.error("OPENAI_API_KEY not set")
+        return None
+    return openai.OpenAI(api_key=key)
+
+
+def _get_anthropic_client():
     try:
         import anthropic
     except ImportError:
         logger.error("anthropic package not installed: pip install anthropic")
         return None
 
-    key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not key:
-        logger.error("ANTHROPIC_API_KEY not set")
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    auth_token = os.environ.get("ANTHROPIC_AUTH_TOKEN", "")
+    if not api_key and not auth_token:
+        logger.error("ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN not set")
         return None
-    return anthropic.Anthropic(api_key=key)
+    return anthropic.Anthropic(
+        api_key=api_key or None,
+        auth_token=auth_token or None,
+    )
 
 
 # Commands that should never be executed via LLM suggestions.
@@ -64,18 +98,51 @@ def _validate_action(data: Dict[str, Any]) -> Optional[Action]:
     return Action(name=name, argv=argv, reason=reason, type=action_type)
 
 
-class LLMPlanner:
-    """Stateless planner that asks Claude for the next action."""
+def _strip_fences(text: str) -> str:
+    """Remove markdown code fences if present."""
+    if text.startswith("```"):
+        lines = text.splitlines()
+        lines = [l for l in lines if not l.startswith("```")]
+        text = "\n".join(lines).strip()
+    return text
 
-    def __init__(self, model: str | None = None):
+
+class LLMPlanner:
+    """Stateless planner that asks an LLM for the next action."""
+
+    def __init__(self, model: str | None = None, backend: str | None = None):
+        self.backend = backend or _detect_backend()
         self.model = model or _get_model()
         self._client = None
 
     @property
     def client(self):
         if self._client is None:
-            self._client = _get_client()
+            if self.backend == "openai":
+                self._client = _get_openai_client()
+            else:
+                self._client = _get_anthropic_client()
         return self._client
+
+    def _call_openai(self, user_msg: str) -> str:
+        response = self.client.chat.completions.create(
+            model=self.model,
+            max_tokens=256,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_msg},
+            ],
+        )
+        return response.choices[0].message.content or ""
+
+    def _call_anthropic(self, user_msg: str) -> str:
+        response = self.client.messages.create(
+            model=self.model,
+            max_tokens=256,
+            system=SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_msg}],
+        )
+        return response.content[0].text if response.content else ""
 
     def choose(
         self,
@@ -102,23 +169,15 @@ class LLMPlanner:
         )
 
         try:
-            response = client.messages.create(
-                model=self.model,
-                max_tokens=256,
-                system=SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": user_msg}],
-            )
+            if self.backend == "openai":
+                text = self._call_openai(user_msg)
+            else:
+                text = self._call_anthropic(user_msg)
         except Exception:
-            logger.exception("Anthropic API call failed")
+            logger.exception("LLM API call failed (%s)", self.backend)
             return None
 
-        text = response.content[0].text.strip() if response.content else ""
-
-        # Strip markdown fences if present
-        if text.startswith("```"):
-            lines = text.splitlines()
-            lines = [l for l in lines if not l.startswith("```")]
-            text = "\n".join(lines).strip()
+        text = _strip_fences(text.strip())
 
         try:
             data = json.loads(text)

@@ -4,3 +4,6 @@ logs/
 __pycache__/
 .DS_Store
 config/df_root.txt
+.env
+.venv-linux/
+.spectory/

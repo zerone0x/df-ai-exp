@@ -99,3 +99,74 @@ Notes:
 - requires an X display host (`xvfb-run` is already used by `goal_runner.py`)
 - requires `xdotool` installed on the host
 - completion is verified with DFHack Lua state probes plus presence of `data/save/region*`
+
+## macOS Development (OrbStack)
+
+DF + DFHack only ship x86_64 Linux/Windows binaries — no native macOS support.
+The recommended setup on Mac is an **OrbStack x86_64 Linux VM** with Rosetta emulation.
+
+### Prerequisites
+
+- [OrbStack](https://orbstack.dev/) installed on macOS
+- [DepotDownloader](https://github.com/SteamRE/DepotDownloader) for fetching Steam game files (`brew tap steamre/tools && brew install depotdownloader`)
+- A Steam account that owns Dwarf Fortress
+
+> **Note:** `steamcmd` segfaults under Rosetta due to a glibc futex/pthreads incompatibility.
+> Use DepotDownloader instead — it is a pure .NET Steam client that runs natively on Apple Silicon.
+
+### One-time setup
+
+```bash
+# 1. Create an x86_64 Ubuntu VM
+orbctl create --arch amd64 ubuntu:24.04 df-ai
+
+# 2. Install runtime dependencies
+orb -m df-ai -u root bash -c "apt-get update && apt-get install -y \
+  xvfb xdotool python3 python3-pip python3-venv \
+  libsdl2-2.0-0 libsdl2-image-2.0-0 libsdl2-ttf-2.0-0"
+
+# 3. Download DF + DFHack via DepotDownloader (on Mac side)
+depotdownloader -app 975370 -os linux -dir /tmp/df-download/df -username YOUR_STEAM_USER -remember-password
+# DFHack (free DLC)
+depotdownloader -app 2346660 -os linux -dir /tmp/df-download/df -username YOUR_STEAM_USER -remember-password
+
+# 4. Copy into VM and fix permissions
+orb -m df-ai -u root bash -c "mkdir -p /opt/df && cp -r /mnt/mac/tmp/df-download/df/* /opt/df/"
+orb -m df-ai -u root bash -c "chmod +x /opt/df/dwarfort /opt/df/dfhack /opt/df/dfhack-run /opt/df/hack/dfhack-run /opt/df/hack/launchdf"
+
+# 5. Set DF_ROOT for this project
+echo '/opt/df' > config/df_root.txt
+
+# 6. Create Python venv inside VM (via Mac mount)
+orb -m df-ai bash -c "cd /mnt/mac$(pwd) && python3 -m venv .venv-linux && source .venv-linux/bin/activate && pip install -r requirements.txt"
+```
+
+### Verify
+
+```bash
+orb -m df-ai -u root -s <<'EOF'
+cd /opt/df
+nohup xvfb-run -a -s "-screen 0 1280x720x24" ./dfhack > /tmp/df_test.log 2>&1 &
+sleep 10
+/opt/df/dfhack-run ls | head -5
+echo "=== OK ==="
+pkill -9 dwarfort
+EOF
+```
+
+### Daily workflow
+
+```bash
+# Mac side — edit code with your IDE
+code ~/Downloads/df-ai-exp
+
+# VM side — run scripts
+orb -m df-ai
+cd /mnt/mac/Users/YOUR_USER/Downloads/df-ai-exp
+source .venv-linux/bin/activate
+export DF_ROOT=/opt/df
+
+python3 scripts/agent_control_loop.py --planner llm
+```
+
+OrbStack mounts the Mac filesystem at `/mnt/mac/`, so code edits on Mac are immediately visible in the VM.
