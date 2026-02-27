@@ -23,8 +23,8 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from df_ai.config import get_df_root, get_logs_dir
 from df_ai.executor import execute_action
-from df_ai.llm_planner import choose_action_llm
-from df_ai.policy import choose_action
+from df_ai.planner import load_catalog
+from df_ai.policy import choose_action, choose_action_llm
 from df_ai.state import extract_runtime_state
 
 
@@ -75,6 +75,8 @@ def main() -> None:
 
         last_ok = True
         successful_commands = 0
+        action_history: list[dict] = []
+        catalog = load_catalog()
 
         with loop_log.open("w", encoding="utf-8") as out:
             for step in range(args.steps):
@@ -86,7 +88,12 @@ def main() -> None:
                 runtime_state["successful_commands"] = successful_commands
 
                 if args.planner == "llm":
-                    action = choose_action_llm(runtime_state, step)
+                    action = choose_action_llm(
+                        runtime_state, step, catalog=catalog, history=action_history
+                    )
+                    if action.type == "done":
+                        print(f"[{_now()}] LLM signaled done: {action.reason}")
+                        break
                 else:
                     action = choose_action(runtime_state, step)
                 result = execute_action(action)
@@ -111,6 +118,15 @@ def main() -> None:
                 out.flush()
 
                 last_ok = result["ok"]
+                action_history.append({
+                    "step": step,
+                    "action": result["action"],
+                    "ok": result["ok"],
+                    "returncode": result["returncode"],
+                })
+                # Keep history bounded
+                if len(action_history) > 15:
+                    action_history = action_history[-10:]
 
                 print(
                     f"step={step:02d} ready={runtime_state.get('dfhack_ready')} "

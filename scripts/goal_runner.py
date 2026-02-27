@@ -50,12 +50,18 @@ def main() -> None:
     parser.add_argument("--plan", type=Path, help="optional JSON plan file")
     parser.add_argument("--goal", type=str, default="quickfort_probe", help="named goal plan")
     parser.add_argument("--warmup", type=float, default=8.0)
+    parser.add_argument("--policy", choices=["rule", "llm"], default="rule",
+                        help="Use LLM planner for dynamic goal execution")
+    parser.add_argument("--max-steps", type=int, default=30,
+                        help="Max steps for LLM-driven execution")
     args = parser.parse_args()
+
+    catalog = load_catalog()
 
     if args.plan:
         plan = json.loads(args.plan.read_text(encoding="utf-8"))
     else:
-        plan = plan_for_goal(args.goal, load_catalog())
+        plan = plan_for_goal(args.goal, catalog)
 
     df_root = get_df_root()
     logs_dir = get_logs_dir()
@@ -68,6 +74,40 @@ def main() -> None:
 
     try:
         time.sleep(args.warmup)
+
+        # LLM-driven dynamic execution
+        if args.policy == "llm":
+            from df_ai.policy import choose_action_llm
+            print(f"[{_now()}] LLM mode goal={args.goal} max_steps={args.max_steps}")
+            action_history: list[dict] = []
+            with run_log.open("w", encoding="utf-8") as out:
+                for step in range(args.max_steps):
+                    runtime_state = extract_runtime_state(host_log)
+                    action = choose_action_llm(
+                        runtime_state, step,
+                        goal=f"Goal: {args.goal}",
+                        catalog=catalog,
+                        history=action_history,
+                    )
+                    if action.type == "done":
+                        print(f"[{_now()}] LLM done: {action.reason}")
+                        event = {"ts": _now(), "step": step, "done": True, "reason": action.reason}
+                        out.write(json.dumps(event, ensure_ascii=False) + "\n")
+                        break
+                    result = execute_action(action)
+                    action_history.append({
+                        "step": step, "action": result["action"],
+                        "ok": result["ok"], "returncode": result["returncode"],
+                    })
+                    if len(action_history) > 15:
+                        action_history = action_history[-10:]
+                    event = {"ts": _now(), "step": step, "result": result}
+                    out.write(json.dumps(event, ensure_ascii=False) + "\n")
+                    out.flush()
+                    shown = result["action"].get("display", "?")
+                    print(f"step={step:02d} action={shown:<22} ok={result['ok']} rc={result['returncode']}")
+            print(f"[{_now()}] done run_log={run_log}")
+            return
 
         print(f"[{_now()}] goal={args.goal} steps={len(plan)}")
         with run_log.open("w", encoding="utf-8") as out:

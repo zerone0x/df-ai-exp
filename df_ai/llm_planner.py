@@ -1,139 +1,129 @@
-"""LLM-backed action planner with safe fallback to rule-based policy."""
+"""LLM-based action planner using Anthropic Claude API."""
 
 from __future__ import annotations
 
 import json
+import logging
 import os
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
-from .planner import load_catalog
-from .policy import Action, choose_action
+from .policy import Action
+from .prompts import SYSTEM_PROMPT, format_catalog, format_state
 
+logger = logging.getLogger(__name__)
 
-MODEL_NAME = "claude-sonnet-4-20250514"
-
-
-def _catalog_categories(catalog: Dict[str, Any]) -> Dict[str, List[str]]:
-    commands = catalog.get("commands", [])
-    roots: set[str] = set()
-    ls_scopes: set[str] = set()
-    for item in commands:
-        argv = item.get("argv") or []
-        if not argv:
-            continue
-        roots.add(str(argv[0]))
-        if len(argv) >= 2 and str(argv[0]) == "ls":
-            ls_scopes.add(str(argv[1]))
-
-    return {
-        "command_roots": sorted(roots),
-        "ls_scopes": sorted(ls_scopes),
-    }
+_DEFAULT_MODEL = "claude-sonnet-4-20250514"
 
 
-def _build_system_prompt(categories: Dict[str, List[str]]) -> str:
-    roots = ", ".join(categories["command_roots"]) or "(none in catalog yet)"
-    scopes = ", ".join(categories["ls_scopes"]) or "(none in catalog yet)"
-    return (
-        "You are planning one safe next command for a Dwarf Fortress automation agent.\n"
-        "Environment:\n"
-        "- Game: Dwarf Fortress\n"
-        "- Automation channel: DFHack command runner (non-interactive)\n"
-        "- Objective: choose exactly one low-risk next command for discovery/probing\n"
-        "Available command categories from catalog:\n"
-        f"- command roots: {roots}\n"
-        f"- ls scopes: {scopes}\n"
-        "Current game/runtime state will be provided by the user message as JSON.\n"
-        "Interpretation hints for state fields:\n"
-        "- dfhack_ready: DFHack host readiness signal\n"
-        "- dfhack_prompt_count: observed DFHack prompt occurrences\n"
-        "- has_floating_point_exception: crash marker; stay conservative if true\n"
-        "- has_audio_errors: likely non-fatal host audio warnings\n"
-        "- successful_commands and last_ok: recent control-loop outcome\n"
-        "Return only valid JSON object with this exact schema:\n"
-        '{"name":"...","argv":["..."],"reason":"...","type":"dfhack"}\n'
-        "Rules:\n"
-        "- type must be dfhack\n"
-        "- argv must be a non-empty tokenized command\n"
-        "- prefer low-risk commands like ls/help/tags when uncertain\n"
-        "- no markdown, no prose outside JSON"
-    )
+def _get_model() -> str:
+    return os.environ.get("DF_AI_MODEL", _DEFAULT_MODEL)
 
 
-def _response_text(resp: Any) -> str:
-    parts: List[str] = []
-    for block in getattr(resp, "content", []):
-        text = getattr(block, "text", None)
-        if text:
-            parts.append(text)
-    return "\n".join(parts).strip()
-
-
-def _parse_action_json(text: str) -> Dict[str, Any]:
-    raw = text.strip()
-    if raw.startswith("```"):
-        raw = raw.strip("`")
-        if raw.startswith("json"):
-            raw = raw[4:].strip()
+def _get_client():  # -> anthropic.Anthropic | None
     try:
-        obj = json.loads(raw)
-        if isinstance(obj, dict):
-            return obj
-    except json.JSONDecodeError:
-        pass
+        import anthropic
+    except ImportError:
+        logger.error("anthropic package not installed: pip install anthropic")
+        return None
 
-    start = raw.find("{")
-    end = raw.rfind("}")
-    if start >= 0 and end > start:
-        return json.loads(raw[start : end + 1])
-    raise ValueError("No JSON object found in model response")
+    key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not key:
+        logger.error("ANTHROPIC_API_KEY not set")
+        return None
+    return anthropic.Anthropic(api_key=key)
 
 
-def _action_from_obj(obj: Dict[str, Any]) -> Action:
-    name = str(obj.get("name", "")).strip()
-    reason = str(obj.get("reason", "")).strip()
-    action_type = str(obj.get("type", "dfhack")).strip() or "dfhack"
-    argv_raw = obj.get("argv", [])
-    if not isinstance(argv_raw, list):
-        raise ValueError("argv must be a list")
-    argv = [str(x).strip() for x in argv_raw if str(x).strip()]
-    if not name or not reason or not argv:
-        raise ValueError("name/reason/argv are required")
+# Commands that should never be executed via LLM suggestions.
+_BLOCKED_COMMANDS = {"die", "kill-lua", "quickfort"}
+
+
+def _validate_action(data: Dict[str, Any]) -> Optional[Action]:
+    """Parse and validate LLM JSON output into an Action."""
+
+    if data.get("done"):
+        return Action(name="llm_done", argv=[], reason=data.get("reason", "done"), type="done")
+
+    name = str(data.get("name", "llm_action"))
+    argv = data.get("argv", [])
+    action_type = str(data.get("type", "dfhack"))
+    reason = str(data.get("reason", ""))
+
+    if not isinstance(argv, list) or not argv:
+        return None
+
+    argv = [str(a) for a in argv]
+
+    # Safety: block dangerous commands
+    if action_type == "dfhack" and argv[0] in _BLOCKED_COMMANDS:
+        logger.warning("LLM suggested blocked command: %s", argv)
+        return None
+
+    if action_type not in ("dfhack", "keystroke"):
+        return None
+
     return Action(name=name, argv=argv, reason=reason, type=action_type)
 
 
-def choose_action_llm(state: Dict[str, Any], step: int) -> Action:
-    """Choose next action via Claude; fallback to rule policy on errors."""
+class LLMPlanner:
+    """Stateless planner that asks Claude for the next action."""
 
-    fallback = choose_action(state, step)
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        return fallback
+    def __init__(self, model: str | None = None):
+        self.model = model or _get_model()
+        self._client = None
 
-    try:
-        import anthropic
+    @property
+    def client(self):
+        if self._client is None:
+            self._client = _get_client()
+        return self._client
 
-        categories = _catalog_categories(load_catalog())
-        system = _build_system_prompt(categories)
-        user_payload = {
-            "step": step,
-            "runtime_state": state,
-        }
+    def choose(
+        self,
+        state: Dict[str, Any],
+        step: int,
+        *,
+        goal: str = "",
+        catalog: Dict[str, Any] | None = None,
+        history: List[Dict[str, Any]] | None = None,
+    ) -> Optional[Action]:
+        """Ask the LLM for the next action. Returns None on failure."""
 
-        client = anthropic.Anthropic(api_key=api_key)
-        resp = client.messages.create(
-            model=MODEL_NAME,
-            max_tokens=300,
-            temperature=0,
-            system=system,
-            messages=[{"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)}],
+        client = self.client
+        if client is None:
+            return None
+
+        catalog_text = format_catalog(catalog or {})
+        user_msg = format_state(
+            state=state,
+            goal=goal,
+            catalog_summary=catalog_text,
+            history=history or [],
+            step=step,
         )
 
-        text = _response_text(resp)
-        obj = _parse_action_json(text)
-        action = _action_from_obj(obj)
-        if action.type != "dfhack":
-            return fallback
-        return action
-    except Exception:
-        return fallback
+        try:
+            response = client.messages.create(
+                model=self.model,
+                max_tokens=256,
+                system=SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": user_msg}],
+            )
+        except Exception:
+            logger.exception("Anthropic API call failed")
+            return None
+
+        text = response.content[0].text.strip() if response.content else ""
+
+        # Strip markdown fences if present
+        if text.startswith("```"):
+            lines = text.splitlines()
+            lines = [l for l in lines if not l.startswith("```")]
+            text = "\n".join(lines).strip()
+
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            logger.error("LLM returned non-JSON: %s", text[:200])
+            return None
+
+        return _validate_action(data)

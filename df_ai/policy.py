@@ -72,3 +72,23 @@ def choose_action(state: Dict[str, Any], step: int) -> Action:
     ]
     name, argv, reason = steady[step % len(steady)]
     return Action(name=name, argv=argv, reason=reason)
+
+
+def choose_action_llm(
+    state: Dict[str, Any],
+    step: int,
+    *,
+    goal: str = "",
+    catalog: Dict[str, Any] | None = None,
+    history: List[Dict[str, Any]] | None = None,
+) -> Action:
+    """Choose next action via LLM, falling back to rule-based on failure."""
+
+    from .llm_planner import LLMPlanner
+
+    planner = LLMPlanner()
+    action = planner.choose(state, step, goal=goal, catalog=catalog, history=history)
+    if action is not None:
+        return action
+    # Fallback
+    return choose_action(state, step)

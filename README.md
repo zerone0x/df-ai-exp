@@ -65,6 +65,25 @@ A stable workaround is:
 DF_ROOT=/absolute/path/to/your/df ./scripts/noninteractive_runner.sh
 ```
 
+## LLM Planner
+
+Instead of the hardcoded rule-based policy, let Claude decide the next action:
+
+```bash
+# Agent control loop with LLM
+ANTHROPIC_API_KEY=sk-... python3 scripts/agent_control_loop.py --planner llm
+
+# Goal runner with LLM (dynamic steps instead of static plan)
+ANTHROPIC_API_KEY=sk-... python3 scripts/goal_runner.py --goal worldgen --policy llm
+
+# Custom model
+DF_AI_MODEL=claude-sonnet-4-20250514 ANTHROPIC_API_KEY=sk-... python3 scripts/agent_control_loop.py --planner llm
+```
+
+The LLM receives current game state, command catalog, and recent action history.
+It outputs structured JSON actions and can signal "done" to stop early.
+Falls back to rule-based policy on API failure.
+
 ## Worldgen automation (MVP)
 
 Worldgen is now supported as a mixed-action goal:
