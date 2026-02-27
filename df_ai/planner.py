@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List
 
+from .goals.embark import plan_embark
 from .goals.worldgen import plan_worldgen
 
 
@@ -58,6 +59,9 @@ def plan_for_goal(goal: str, catalog: Dict[str, Any] | None = None) -> List[Dict
 
     if goal == "worldgen":
         return plan_worldgen()
+
+    if goal == "embark":
+        return plan_embark()
 
     # default conservative goal
     return [
