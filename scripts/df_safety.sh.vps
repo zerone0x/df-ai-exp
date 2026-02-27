@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# Safety wrapper for DF experiments — prevents VPS overload
+set -euo pipefail
+
+ACTION="${1:-status}"
+
+case "$ACTION" in
+  status)
+    echo "=== DF Processes ==="
+    ps aux | grep -E "dwarfort|dfhack|Xvfb" | grep -v grep || echo "(none)"
+    echo ""
+    echo "=== System Load ==="
+    uptime
+    echo ""
+    echo "=== Memory ==="
+    free -h | head -3
+    echo ""
+    echo "=== Xvfb Temps ==="
+    ls -d /tmp/xvfb-run.* 2>/dev/null | wc -l
+    echo " xvfb-run dirs in /tmp"
+    ;;
+
+  killall)
+    echo "Killing all DF-related processes..."
+    pkill -9 dwarfort 2>/dev/null && echo "  killed dwarfort" || echo "  no dwarfort"
+    pkill -9 -f "dfhack" 2>/dev/null && echo "  killed dfhack" || echo "  no dfhack"
+    # Only kill DF-related Xvfb (display :50-:59 reserved for DF)
+    for pid in $(pgrep -f "Xvfb :[5][0-9]" 2>/dev/null); do
+      kill -9 "$pid" 2>/dev/null && echo "  killed Xvfb $pid"
+    done
+    # Also kill xvfb-run spawned ones
+    pkill -9 -f "xvfb-run.*dfhack" 2>/dev/null && echo "  killed xvfb-run" || true
+    pkill -9 openbox 2>/dev/null && echo "  killed openbox" || true
+    # Clean temp dirs
+    rm -rf /tmp/xvfb-run.* 2>/dev/null && echo "  cleaned /tmp/xvfb-run.*"
+    echo "Done."
+    ;;
+
+  guard)
+    # Background watchdog: kill DF if load > 3 or memory < 200MB free
+    echo "Starting safety guard (background)..."
+    while true; do
+      load=$(awk '{print int($1)}' /proc/loadavg)
+      mem_free=$(awk '/MemAvailable/{print int($2/1024)}' /proc/meminfo)
+      df_count=$(pgrep -c dwarfort 2>/dev/null || echo 0)
+
+      if [ "$df_count" -gt 1 ]; then
+        echo "[GUARD] Multiple DF instances ($df_count)! Killing extras..."
+        # Keep only the newest, kill the rest
+        pgrep dwarfort | head -n -1 | xargs kill -9 2>/dev/null
+      fi
+
+      if [ "$load" -gt 3 ] && [ "$df_count" -gt 0 ]; then
+        echo "[GUARD] Load too high ($load)! Killing DF..."
+        pkill -9 dwarfort 2>/dev/null
+        pkill -9 -f dfhack 2>/dev/null
+      fi
+
+      if [ "$mem_free" -lt 200 ] && [ "$df_count" -gt 0 ]; then
+        echo "[GUARD] Memory critical (${mem_free}MB free)! Killing DF..."
+        pkill -9 dwarfort 2>/dev/null
+        pkill -9 -f dfhack 2>/dev/null
+      fi
+
+      sleep 10
+    done
+    ;;
+
+  *)
+    echo "Usage: $0 {status|killall|guard}"
+    exit 1
+    ;;
+esac

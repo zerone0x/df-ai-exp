@@ -1,0 +1,148 @@
+"""Screen interaction layer: screenshots + key injection via xdotool/scrot.
+
+Designed for headless Xvfb sessions where DFHack lua GUI calls segfault.
+Uses xdotool for keyboard input and scrot for screen capture.
+"""
+
+from __future__ import annotations
+
+import glob
+import os
+import subprocess
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import List, Optional
+
+
+@dataclass
+class XSession:
+    """Tracks a running Xvfb + DF session."""
+    display: str
+    xauthority: str
+    host_pid: int
+    window_id: Optional[str] = None
+
+    @property
+    def env(self) -> dict[str, str]:
+        return {
+            **os.environ,
+            "DISPLAY": self.display,
+            "XAUTHORITY": self.xauthority,
+        }
+
+
+def find_active_session() -> Optional[XSession]:
+    """Find the currently running Xvfb session hosting DF."""
+    # Find xvfb-run processes and their auth files
+    try:
+        result = subprocess.run(
+            ["pgrep", "-af", "xvfb-run.*dfhack"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            return None
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return None
+
+    pid = int(result.stdout.strip().split()[0])
+
+    # Find the display number from Xvfb process
+    try:
+        xvfb_result = subprocess.run(
+            ["pgrep", "-af", "Xvfb"],
+            capture_output=True, text=True, timeout=5,
+        )
+        display = ":99"  # default
+        for line in xvfb_result.stdout.strip().splitlines():
+            parts = line.split()
+            for p in parts:
+                if p.startswith(":") and p[1:].isdigit():
+                    display = p
+                    break
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        display = ":99"
+
+    # Find matching Xauthority
+    auth_files = sorted(glob.glob("/tmp/xvfb-run.*/Xauthority"), key=os.path.getmtime, reverse=True)
+    if not auth_files:
+        return None
+
+    # Try each auth file until one works
+    for auth in auth_files:
+        try:
+            test = subprocess.run(
+                ["xdotool", "search", "--name", ""],
+                capture_output=True, text=True, timeout=5,
+                env={**os.environ, "DISPLAY": display, "XAUTHORITY": auth},
+            )
+            if test.returncode == 0 and test.stdout.strip():
+                window_id = test.stdout.strip().splitlines()[0]
+                return XSession(
+                    display=display,
+                    xauthority=auth,
+                    host_pid=pid,
+                    window_id=window_id,
+                )
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            continue
+
+    return None
+
+
+def send_keys(session: XSession, keys: List[str], delay_ms: int = 100) -> bool:
+    """Send keyboard keys to the DF window.
+
+    Args:
+        session: Active X session.
+        keys: List of xdotool key names (e.g. ["Return", "Escape", "Tab"]).
+        delay_ms: Delay between keys in milliseconds.
+    """
+    for key in keys:
+        try:
+            cmd = ["xdotool", "key", "--delay", str(delay_ms)]
+            if session.window_id:
+                cmd.extend(["--window", session.window_id])
+            cmd.append(key)
+            subprocess.run(cmd, env=session.env, timeout=5, check=True,
+                           capture_output=True)
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as e:
+            print(f"send_keys failed for '{key}': {e}")
+            return False
+    return True
+
+
+def send_text(session: XSession, text: str) -> bool:
+    """Type text into the DF window."""
+    try:
+        cmd = ["xdotool", "type", "--clearmodifiers"]
+        if session.window_id:
+            cmd.extend(["--window", session.window_id])
+        cmd.append(text)
+        subprocess.run(cmd, env=session.env, timeout=5, check=True,
+                       capture_output=True)
+        return True
+    except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as e:
+        print(f"send_text failed: {e}")
+        return False
+
+
+def screenshot(session: XSession, output_path: Path) -> Optional[Path]:
+    """Take a screenshot of the current DF screen."""
+    try:
+        subprocess.run(
+            ["scrot", str(output_path)],
+            env=session.env, timeout=10, check=True,
+            capture_output=True,
+        )
+        if output_path.exists() and output_path.stat().st_size > 0:
+            return output_path
+    except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as e:
+        print(f"screenshot failed: {e}")
+    return None
+
+
+def wait_and_screenshot(session: XSession, output_path: Path, wait_secs: float = 1.0) -> Optional[Path]:
+    """Wait then take a screenshot."""
+    time.sleep(wait_secs)
+    return screenshot(session, output_path)

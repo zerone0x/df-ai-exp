@@ -1,0 +1,249 @@
+"""World generation goal: navigate DF menus to create a new world.
+
+DF 50+ (Steam) worldgen flow:
+  Main Menu → "Create new world" (Enter) → World Gen params screen
+  → Choose preset or customize → "y" to accept/generate
+  → Wait for generation to complete → arrives at embark or main menu
+
+Since DFHack lua GUI calls segfault in this environment, we use
+xdotool for all menu navigation and scrot for screen verification.
+"""
+
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass, field
+from enum import Enum
+from pathlib import Path
+from typing import List, Optional
+
+from .screen import XSession, send_keys, screenshot, wait_and_screenshot
+
+
+class WorldGenPhase(str, Enum):
+    MAIN_MENU = "main_menu"
+    CREATE_WORLD_PARAMS = "create_world_params"
+    GENERATING = "generating"
+    COMPLETE = "complete"
+    ERROR = "error"
+    UNKNOWN = "unknown"
+
+
+class WorldSize(str, Enum):
+    POCKET = "pocket"       # 17x17
+    SMALLER = "smaller"     # 33x33
+    SMALL = "small"         # 65x65
+    MEDIUM = "medium"       # 129x129
+    LARGE = "large"         # 257x257
+
+
+@dataclass
+class WorldGenConfig:
+    """Configuration for world generation."""
+    size: WorldSize = WorldSize.POCKET  # smallest = fastest for testing
+    history_years: int = 5              # short history for speed
+    # Use default params for everything else (mineral scarcity, etc.)
+
+
+@dataclass
+class WorldGenStep:
+    """A single step in the worldgen sequence."""
+    name: str
+    keys: List[str]
+    wait_after: float = 1.0
+    screenshot_after: bool = True
+    description: str = ""
+
+
+@dataclass
+class WorldGenResult:
+    """Result of a worldgen attempt."""
+    success: bool
+    phase: WorldGenPhase
+    steps_completed: int
+    total_steps: int
+    screenshots: List[Path] = field(default_factory=list)
+    error: Optional[str] = None
+    duration: float = 0.0
+
+
+def build_worldgen_plan(config: WorldGenConfig) -> List[WorldGenStep]:
+    """Build the sequence of key inputs for world generation.
+
+    DF Steam worldgen screen layout (from main menu "Create new world"):
+    - Tab key cycles between parameter fields
+    - Left/Right arrows change values
+    - Enter/y to accept and start generation
+
+    The default "Create new world" screen has:
+    1. World size (first field, already focused)
+    2. History length
+    3. Number of civilizations
+    4. Number of sites
+    5. Number of beasts
+    6. Mineral scarcity
+    7. Savagery (various)
+    ...then y/Enter to generate
+    """
+
+    steps: List[WorldGenStep] = []
+
+    # Step 0: Press Enter on "Create new world" (assumed highlighted on main menu)
+    steps.append(WorldGenStep(
+        name="enter_create_world",
+        keys=["Return"],
+        wait_after=2.0,
+        description="Enter the Create World screen from main menu",
+    ))
+
+    # Step 1: Set world size
+    # Default is "Medium". We need to navigate to our desired size.
+    # The size field should be the first/already selected field.
+    # Left arrow = smaller, Right arrow = larger
+    size_map = {
+        WorldSize.POCKET: -2,    # Medium → Small → Smaller → Pocket... need to go left
+        WorldSize.SMALLER: -1,
+        WorldSize.SMALL: 0,      # might need adjustment based on default
+        WorldSize.MEDIUM: 0,     # default
+        WorldSize.LARGE: 1,
+    }
+
+    # From default (Medium), go left for smaller sizes
+    # Actually DF defaults vary. Let's just go all the way left then right to target.
+    # Safest: press Left 4 times (guaranteed smallest), then Right N times.
+    size_order = [WorldSize.POCKET, WorldSize.SMALLER, WorldSize.SMALL, WorldSize.MEDIUM, WorldSize.LARGE]
+    target_idx = size_order.index(config.size)
+
+    # Go to smallest first
+    steps.append(WorldGenStep(
+        name="size_reset_left",
+        keys=["Left"] * 5,  # guaranteed to hit minimum
+        wait_after=0.3,
+        screenshot_after=False,
+        description="Reset world size to minimum",
+    ))
+
+    if target_idx > 0:
+        steps.append(WorldGenStep(
+            name="size_select",
+            keys=["Right"] * target_idx,
+            wait_after=0.3,
+            screenshot_after=False,
+            description=f"Set world size to {config.size.value}",
+        ))
+
+    # Step 2: Tab to history years and set
+    steps.append(WorldGenStep(
+        name="tab_to_history",
+        keys=["Tab"],
+        wait_after=0.3,
+        screenshot_after=False,
+        description="Tab to history length field",
+    ))
+
+    # History options: Short/Medium/Long/Very Long
+    # Go all the way left then select target
+    history_map = {5: 0, 100: 1, 250: 2, 550: 3, 1050: 4}
+    # For short history, just go all the way left
+    steps.append(WorldGenStep(
+        name="history_reset_left",
+        keys=["Left"] * 5,
+        wait_after=0.3,
+        screenshot_after=False,
+        description="Reset history to minimum",
+    ))
+
+    # Step 3: Take a screenshot of params before confirming
+    steps.append(WorldGenStep(
+        name="params_screenshot",
+        keys=[],  # no keys, just screenshot
+        wait_after=0.5,
+        screenshot_after=True,
+        description="Capture world gen parameters",
+    ))
+
+    # Step 4: Accept and generate (press 'y' to start generation)
+    steps.append(WorldGenStep(
+        name="start_generation",
+        keys=["y"],
+        wait_after=5.0,  # worldgen takes time
+        description="Accept parameters and start world generation",
+    ))
+
+    # Step 5: Wait for generation (pocket world with short history should be fast)
+    # Take periodic screenshots to monitor progress
+    for i in range(6):
+        steps.append(WorldGenStep(
+            name=f"gen_wait_{i}",
+            keys=[],  # just wait and screenshot
+            wait_after=10.0,
+            screenshot_after=True,
+            description=f"Wait for generation (check {i+1}/6)",
+        ))
+
+    # Step 6: After generation completes, DF goes to "Start playing" or similar
+    # Press Escape to go back to main menu (if we just want the world created)
+    steps.append(WorldGenStep(
+        name="post_gen",
+        keys=["Escape"],
+        wait_after=2.0,
+        description="Post-generation: return to menu",
+    ))
+
+    return steps
+
+
+def run_worldgen(session: XSession, config: Optional[WorldGenConfig] = None,
+                 screenshot_dir: Optional[Path] = None) -> WorldGenResult:
+    """Execute the world generation sequence.
+
+    Args:
+        session: Active X session with DF running.
+        config: World generation parameters. Defaults to pocket/short.
+        screenshot_dir: Where to save screenshots. Defaults to /tmp/df_worldgen/.
+    """
+    config = config or WorldGenConfig()
+    screenshot_dir = screenshot_dir or Path("/tmp/df_worldgen")
+    screenshot_dir.mkdir(parents=True, exist_ok=True)
+
+    plan = build_worldgen_plan(config)
+    screenshots: List[Path] = []
+    start_time = time.monotonic()
+
+    for i, step in enumerate(plan):
+        print(f"[worldgen] step {i}/{len(plan)-1}: {step.name} — {step.description}")
+
+        # Send keys if any
+        if step.keys:
+            ok = send_keys(session, step.keys, delay_ms=150)
+            if not ok:
+                return WorldGenResult(
+                    success=False,
+                    phase=WorldGenPhase.ERROR,
+                    steps_completed=i,
+                    total_steps=len(plan),
+                    screenshots=screenshots,
+                    error=f"Key injection failed at step {i}: {step.name}",
+                    duration=time.monotonic() - start_time,
+                )
+
+        # Wait
+        if step.wait_after > 0:
+            time.sleep(step.wait_after)
+
+        # Screenshot
+        if step.screenshot_after:
+            ss_path = screenshot_dir / f"worldgen_{i:02d}_{step.name}.png"
+            result = screenshot(session, ss_path)
+            if result:
+                screenshots.append(result)
+                print(f"  → screenshot: {ss_path}")
+
+    return WorldGenResult(
+        success=True,  # optimistic; caller should verify via screenshot
+        phase=WorldGenPhase.COMPLETE,
+        steps_completed=len(plan),
+        total_steps=len(plan),
+        screenshots=screenshots,
+        duration=time.monotonic() - start_time,
+    )
